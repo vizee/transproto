@@ -6,6 +6,11 @@ edition = "2018"
 
 [dependencies]
 base64 = "0.13"
+itoa = "0.4"
+dtoa = "0.4"
+
+[profile.bench]
+debug = true
 
 [[bench]]
 name = "bench"

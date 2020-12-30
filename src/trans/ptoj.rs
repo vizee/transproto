@@ -1,17 +1,15 @@
-use std::fmt::Display;
-use std::io::Write;
 use std::ptr::NonNull;
-
-use base64::display::Base64Display;
 
 use crate::json;
 
+use super::append::Append;
 use super::*;
 
 macro_rules! write_primitive {
-    ($b: expr, $v: expr) => {
-        $b.write_fmt(format_args!("{}", $v)).map_err(Error::Io)
-    };
+    ($b: expr, $v: expr) => {{
+        ($v).append_into($b);
+        Ok(())
+    }};
 }
 
 enum Value<'a> {
@@ -100,7 +98,7 @@ fn trans_map_kv(buf: &mut Vec<u8>, kty: &Type, vty: &Type, dec: &mut Decoder) ->
         }
     }
     if let Value::Bytes(k) = k_val {
-        trans_string(buf, k).expect("never error");
+        trans_string(buf, k);
     } else {
         buf.extend_from_slice(b"\"\"");
     }
@@ -115,7 +113,7 @@ fn trans_map_kv(buf: &mut Vec<u8>, kty: &Type, vty: &Type, dec: &mut Decoder) ->
 
 fn trans_repeated_impl<T, R>(buf: &mut Vec<u8>, dec: &mut Decoder, r: R) -> Result<()>
 where
-    T: Display,
+    T: Append,
     R: Fn(&mut Decoder) -> io::Result<T>,
 {
     let mut more = false;
@@ -126,9 +124,7 @@ where
         } else {
             buf.push(b',');
         };
-        r(dec)
-            .and_then(|v| buf.write_fmt(format_args!("{}", v)))
-            .map_err(Error::from)?;
+        r(dec).map(|v| v.append_into(buf)).map_err(Error::from)?;
     }
     buf.push(b']');
     Ok(())
@@ -151,32 +147,36 @@ fn trans_repeated_packed(buf: &mut Vec<u8>, dec: &mut Decoder, ty: &Type) -> Res
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn trans_string(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
+fn trans_string(buf: &mut Vec<u8>, data: &[u8]) {
     buf.push(b'"');
     json::escape_string(data, buf);
     buf.push(b'"');
-    Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn trans_bytes(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
+fn trans_bytes(buf: &mut Vec<u8>, data: &[u8]) {
     buf.push(b'"');
-    buf.write_fmt(format_args!(
-        "{}",
-        Base64Display::with_config(data, base64::STANDARD)
-    ))
-    .expect("must be ok");
+    let enc_len = (data.len() + 2) / 3 * 4;
+    buf.reserve(enc_len);
+    let n = buf.len();
+    let z = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().offset(n as isize), enc_len) };
+    let m = base64::encode_config_slice(data, base64::STANDARD, z);
+    assert_eq!(enc_len, m);
+    unsafe { buf.set_len(n + m) };
     buf.push(b'"');
-    Ok(())
 }
 
 fn trans_value(buf: &mut Vec<u8>, ty: &Type, v: Value) -> Result<()> {
     match ty {
         Type::Map(kty, vty) => trans_map_kv(buf, &kty, &vty, &mut Decoder::new(v.into_bytes())),
         Type::Array(elem) => trans_repeated_packed(buf, &mut Decoder::new(v.into_bytes()), &elem),
-        Type::String => trans_string(buf, v.into_bytes()),
-        Type::Bytes => trans_bytes(buf, v.into_bytes()),
+        Type::String => {
+            trans_string(buf, v.into_bytes());
+            Ok(())
+        }
+        Type::Bytes => {
+            trans_bytes(buf, v.into_bytes());
+            Ok(())
+        }
         Type::Message(msg) => trans_message(buf, &mut Decoder::new(v.into_bytes()), msg),
         Type::Double => write_primitive!(buf, f64::from_le_bytes(v.into_u64().to_le_bytes())),
         Type::Float => write_primitive!(buf, f32::from_le_bytes(v.into_u32().to_le_bytes())),
@@ -283,14 +283,16 @@ pub fn trans_proto_to_json(buf: &mut Vec<u8>, dec: &mut Decoder, ty: &Type) -> R
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::super::tests::*;
     use super::*;
 
-    fn test_trans_proto_to_json(s: &[u8]) {
+    fn test_trans_proto_to_json(s: &[u8], ty: &Type) {
         println!("input: {}", printable(s));
         let mut buf = Vec::new();
         let mut dec = Decoder::new(s);
-        let r = trans_proto_to_json(&mut buf, &mut dec, &get_msg_foo_type());
+        let r = trans_proto_to_json(&mut buf, &mut dec, ty);
         if let Err(ref e) = r {
             println!("err: {}", e);
         }
@@ -300,22 +302,43 @@ mod tests {
 
     #[test]
     fn test_trans_proto_to_json_case0() {
-        test_trans_proto_to_json(&[]);
+        test_trans_proto_to_json(&[], &get_msg_foo_type());
     }
 
     #[test]
     fn test_trans_proto_to_json_case1() {
-        test_trans_proto_to_json(&[
-            34, 0, 42, 3, 0, 0, 0, 50, 0, 50, 0, 50, 0, 58, 0, 58, 0, 58, 0, 58, 0, 58, 0, 58, 0,
-            58, 0, 58, 0,
-        ]);
+        test_trans_proto_to_json(
+            &[
+                34, 0, 42, 3, 0, 0, 0, 50, 0, 50, 0, 50, 0, 58, 0, 58, 0, 58, 0, 58, 0, 58, 0, 58,
+                0, 58, 0, 58, 0,
+            ],
+            &get_msg_foo_type(),
+        );
     }
 
     #[test]
     fn test_trans_proto_to_json_case2() {
-        test_trans_proto_to_json(&[
-            10, 1, 97, 16, 1, 24, 1, 34, 5, 8, 2, 18, 1, 98, 42, 3, 3, 4, 5, 50, 2, 102, 48, 50, 2,
-            102, 49, 50, 2, 102, 50, 58, 6, 8, 6, 18, 2, 115, 48, 58, 6, 8, 7, 18, 2, 115, 49,
-        ]);
+        test_trans_proto_to_json(
+            &[
+                10, 1, 97, 16, 1, 24, 1, 34, 5, 8, 2, 18, 1, 98, 42, 3, 3, 4, 5, 50, 2, 102, 48,
+                50, 2, 102, 49, 50, 2, 102, 50, 58, 6, 8, 6, 18, 2, 115, 48, 58, 6, 8, 7, 18, 2,
+                115, 49,
+            ],
+            &get_msg_foo_type(),
+        );
+    }
+
+    #[test]
+    fn test_trans_proto_to_json_case3() {
+        let ty = Type::Message(Message::new(
+            "pbmsg.RawData".to_string(),
+            vec![Field {
+                name: "a".to_string(),
+                tag: 1,
+                ty: Rc::new(Type::Bytes),
+            }],
+            false,
+        ));
+        test_trans_proto_to_json(&[10, 5, 104, 101, 108, 108, 111], &ty);
     }
 }

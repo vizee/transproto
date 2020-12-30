@@ -6,6 +6,7 @@ use std::result;
 use crate::metadata::*;
 use crate::proto::*;
 
+mod append;
 mod jtop;
 mod ptoj;
 
