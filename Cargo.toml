@@ -3,6 +3,10 @@ name = "transcode"
 version = "0.1.0"
 authors = ["vizee <vizee@live.cn>"]
 edition = "2018"
+license = "MIT"
+description = "translates encoding between json and protobuf"
+repository = "https://github.com/vizee/transcode"
+readme = "README.md"
 
 [dependencies]
 base64 = "0.13"
