@@ -1,17 +1,17 @@
 [package]
 name = "transcode"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["vizee <vizee@live.cn>"]
-edition = "2018"
+edition = "2021"
 license = "MIT"
 description = "translates encoding between json and protobuf"
 repository = "https://github.com/vizee/transcode"
 readme = "README.md"
 
 [dependencies]
-base64 = "0.13"
-itoa = "0.4"
-dtoa = "0.4"
+base64 = "0.21"
+itoa = "1.0"
+dtoa = "1.0"
 
 [profile.bench]
 debug = true

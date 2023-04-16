@@ -1,6 +1,8 @@
-use std::ptr::NonNull;
+use base64::prelude::*;
 
 use crate::json;
+use crate::metadata::*;
+use crate::proto::*;
 
 use super::append::Append;
 use super::*;
@@ -42,31 +44,64 @@ impl<'a> Value<'a> {
     }
 }
 
-fn trans_default_value(buf: &mut Vec<u8>, ty: &Type) {
-    match ty {
-        Type::Double
-        | Type::Float
-        | Type::Int32
-        | Type::Int64
-        | Type::Uint32
-        | Type::Uint64
-        | Type::Sint32
-        | Type::Sint64
-        | Type::Fixed32
-        | Type::Fixed64
-        | Type::Sfixed32
-        | Type::Sfixed64 => buf.push(b'0'),
-        Type::Bool => buf.extend_from_slice(b"false"),
-        Type::String | Type::Bytes => buf.extend_from_slice(b"\"\""),
-        Type::Array(_) | Type::Map(_, _) | Type::Message(_) => buf.extend_from_slice(b"null"),
+pub(self) fn field_wire_type(field: &Field) -> u32 {
+    if field.repeated {
+        WIRE_LEN_DELIM
+    } else {
+        match field.kind {
+            Kind::Double => WIRE_64BIT,
+            Kind::Float => WIRE_32BIT,
+            Kind::Int32 => WIRE_VARINT,
+            Kind::Int64 => WIRE_VARINT,
+            Kind::Uint32 => WIRE_VARINT,
+            Kind::Uint64 => WIRE_VARINT,
+            Kind::Sint32 => WIRE_VARINT,
+            Kind::Sint64 => WIRE_VARINT,
+            Kind::Fixed32 => WIRE_32BIT,
+            Kind::Fixed64 => WIRE_64BIT,
+            Kind::Sfixed32 => WIRE_32BIT,
+            Kind::Sfixed64 => WIRE_64BIT,
+            Kind::Bool => WIRE_VARINT,
+            Kind::String => WIRE_LEN_DELIM,
+            Kind::Bytes => WIRE_LEN_DELIM,
+            Kind::Map(_) => WIRE_LEN_DELIM,
+            Kind::Message(_) => WIRE_LEN_DELIM,
+        }
     }
 }
 
-fn trans_map_kv(buf: &mut Vec<u8>, kty: &Type, vty: &Type, dec: &mut Decoder) -> Result<()> {
-    if !matches!(kty, Type::String) {
+fn trans_default_value(buf: &mut Vec<u8>, field: &Field) {
+    if field.repeated {
+        buf.extend_from_slice(b"null")
+    } else {
+        match field.kind {
+            Kind::Double
+            | Kind::Float
+            | Kind::Int32
+            | Kind::Int64
+            | Kind::Uint32
+            | Kind::Uint64
+            | Kind::Sint32
+            | Kind::Sint64
+            | Kind::Fixed32
+            | Kind::Fixed64
+            | Kind::Sfixed32
+            | Kind::Sfixed64 => buf.push(b'0'),
+            Kind::Bool => buf.extend_from_slice(b"false"),
+            Kind::String | Kind::Bytes => buf.extend_from_slice(b"\"\""),
+            Kind::Map(_) | Kind::Message(_) => buf.extend_from_slice(b"null"),
+        }
+    }
+}
+
+fn trans_map_kv(buf: &mut Vec<u8>, dec: &mut Decoder, entry: &Message) -> Result<()> {
+    assert_eq!(entry.get_fields().len(), 2);
+    let k_field = &entry.get_fields()[0];
+    if !matches!(k_field.kind, Kind::String) {
         return Err(Error::Wrap("key type must be string".into()));
     }
-    let v_wire = wire_type(vty);
+    let v_field = &entry.get_fields()[1];
+    let v_wire = field_wire_type(v_field);
     let mut k_val = Value::None;
     let mut v_val = Value::None;
     while !dec.eof() {
@@ -98,16 +133,16 @@ fn trans_map_kv(buf: &mut Vec<u8>, kty: &Type, vty: &Type, dec: &mut Decoder) ->
         }
     }
     if let Value::Bytes(k) = k_val {
-        trans_string(buf, k);
+        trans_string(buf, k)?;
     } else {
         buf.extend_from_slice(b"\"\"");
     }
     buf.push(b':');
     if let Value::None = v_val {
-        trans_default_value(buf, vty);
+        trans_default_value(buf, v_field);
         Ok(())
     } else {
-        trans_value(buf, vty, v_val)
+        trans_field_value(buf, v_field, v_val)
     }
 }
 
@@ -130,69 +165,71 @@ where
     Ok(())
 }
 
-fn trans_repeated_packed(buf: &mut Vec<u8>, dec: &mut Decoder, ty: &Type) -> Result<()> {
-    match ty {
-        Type::Double => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<f64>()),
-        Type::Float => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<f32>()),
-        Type::Int32 => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v as i32)),
-        Type::Int64 => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v as i64)),
-        Type::Uint32 | Type::Uint64 => trans_repeated_impl(buf, dec, |dec| dec.read_varint()),
-        Type::Sint32 | Type::Sint64 => trans_repeated_impl(buf, dec, |dec| dec.read_zigzag()),
-        Type::Fixed32 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<u32>()),
-        Type::Fixed64 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<u64>()),
-        Type::Sfixed32 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<i32>()),
-        Type::Sfixed64 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<i64>()),
-        Type::Bool => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v != 0)),
+fn trans_repeated_field(buf: &mut Vec<u8>, dec: &mut Decoder, field: &Field) -> Result<()> {
+    match field.kind {
+        Kind::Double => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<f64>()),
+        Kind::Float => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<f32>()),
+        Kind::Int32 => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v as i32)),
+        Kind::Int64 => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v as i64)),
+        Kind::Uint32 | Kind::Uint64 => trans_repeated_impl(buf, dec, |dec| dec.read_varint()),
+        Kind::Sint32 | Kind::Sint64 => trans_repeated_impl(buf, dec, |dec| dec.read_zigzag()),
+        Kind::Fixed32 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<u32>()),
+        Kind::Fixed64 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<u64>()),
+        Kind::Sfixed32 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<i32>()),
+        Kind::Sfixed64 => trans_repeated_impl(buf, dec, |dec| dec.read_fixed::<i64>()),
+        Kind::Bool => trans_repeated_impl(buf, dec, |dec| dec.read_varint().map(|v| v != 0)),
+
         _ => Err(Error::Wrap("unexpected type".into())),
     }
 }
 
-fn trans_string(buf: &mut Vec<u8>, data: &[u8]) {
+fn trans_string(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     buf.push(b'"');
     json::escape_string(data, buf);
     buf.push(b'"');
+    Ok(())
 }
 
-fn trans_bytes(buf: &mut Vec<u8>, data: &[u8]) {
+fn trans_bytes(buf: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     buf.push(b'"');
     let enc_len = (data.len() + 2) / 3 * 4;
     buf.reserve(enc_len);
     let n = buf.len();
     let z = unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().offset(n as isize), enc_len) };
-    let m = base64::encode_config_slice(data, base64::STANDARD, z);
+    let m = BASE64_STANDARD
+        .encode_slice(data, z)
+        .map_err(|e| Error::Wrap(e.into()))?;
     assert_eq!(enc_len, m);
     unsafe { buf.set_len(n + m) };
     buf.push(b'"');
+    Ok(())
 }
 
-fn trans_value(buf: &mut Vec<u8>, ty: &Type, v: Value) -> Result<()> {
-    match ty {
-        Type::Map(kty, vty) => trans_map_kv(buf, &kty, &vty, &mut Decoder::new(v.into_bytes())),
-        Type::Array(elem) => trans_repeated_packed(buf, &mut Decoder::new(v.into_bytes()), &elem),
-        Type::String => {
-            trans_string(buf, v.into_bytes());
-            Ok(())
+fn trans_field_value(buf: &mut Vec<u8>, field: &Field, v: Value) -> Result<()> {
+    if field.repeated {
+        trans_repeated_field(buf, &mut Decoder::new(v.into_bytes()), field)
+    } else {
+        match field.kind {
+            Kind::Map(ref entry) => trans_map_kv(buf, &mut Decoder::new(v.into_bytes()), &entry),
+            Kind::String => trans_string(buf, v.into_bytes()),
+            Kind::Bytes => trans_bytes(buf, v.into_bytes()),
+            Kind::Message(ref msg) => trans_message(buf, &mut Decoder::new(v.into_bytes()), msg),
+            Kind::Double => write_primitive!(buf, f64::from_le_bytes(v.into_u64().to_le_bytes())),
+            Kind::Float => write_primitive!(buf, f32::from_le_bytes(v.into_u32().to_le_bytes())),
+            Kind::Int32 => write_primitive!(buf, v.into_u64() as i32),
+            Kind::Int64 | Kind::Sfixed64 => write_primitive!(buf, v.into_u64() as i64),
+            Kind::Uint32 | Kind::Uint64 | Kind::Fixed64 => write_primitive!(buf, v.into_u64()),
+            Kind::Sint32 | Kind::Sint64 => write_primitive!(buf, unzigzag(v.into_u64())),
+            Kind::Fixed32 => write_primitive!(buf, v.into_u32()),
+            Kind::Sfixed32 => write_primitive!(buf, v.into_u32() as i32),
+            Kind::Bool => write_primitive!(buf, v.into_u64() != 0),
         }
-        Type::Bytes => {
-            trans_bytes(buf, v.into_bytes());
-            Ok(())
-        }
-        Type::Message(msg) => trans_message(buf, &mut Decoder::new(v.into_bytes()), msg),
-        Type::Double => write_primitive!(buf, f64::from_le_bytes(v.into_u64().to_le_bytes())),
-        Type::Float => write_primitive!(buf, f32::from_le_bytes(v.into_u32().to_le_bytes())),
-        Type::Int32 => write_primitive!(buf, v.into_u64() as i32),
-        Type::Int64 | Type::Sfixed64 => write_primitive!(buf, v.into_u64() as i64),
-        Type::Uint32 | Type::Uint64 | Type::Fixed64 => write_primitive!(buf, v.into_u64()),
-        Type::Sint32 | Type::Sint64 => write_primitive!(buf, unzigzag(v.into_u64())),
-        Type::Fixed32 => write_primitive!(buf, v.into_u32()),
-        Type::Sfixed32 => write_primitive!(buf, v.into_u32() as i32),
-        Type::Bool => write_primitive!(buf, v.into_u64() != 0),
     }
 }
 
 fn trans_message(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<()> {
     let mut cur_tag = 0u32;
-    let mut cur_type: NonNull<Type> = NonNull::dangling();
+    let mut cur_field = None;
     let mut more = false;
     let mut expect_wire = 0u32;
     let mut rep_close = 0u8;
@@ -220,8 +257,8 @@ fn trans_message(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<
             }
 
             cur_tag = tag;
-            cur_type = NonNull::from(field.ty.as_ref());
-            expect_wire = wire_type(&field.ty);
+            cur_field = Some(field);
+            expect_wire = field_wire_type(field);
 
             if !more {
                 more = true;
@@ -233,23 +270,19 @@ fn trans_message(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<
             buf.push(b'"');
             buf.push(b':');
 
-            match field.ty.as_ref() {
-                Type::Array(elem) => match elem.as_ref() {
-                    Type::String | Type::Bytes | Type::Message(_) => {
-                        cur_type = NonNull::from(elem.as_ref());
-                        // expect_wire = wire_type(&field.ty);
+            if field.repeated {
+                match field.kind {
+                    Kind::String | Kind::Bytes | Kind::Message(_) => {
                         buf.push(b'[');
                         rep_close = b']';
                         more = false;
                     }
                     _ => {}
-                },
-                Type::Map(_, _) => {
-                    buf.push(b'{');
-                    rep_close = b'}';
-                    more = false;
                 }
-                _ => {}
+            } else if matches!(field.kind, Kind::Map(_)) {
+                buf.push(b'{');
+                rep_close = b'}';
+                more = false;
             }
         }
         if wire != expect_wire {
@@ -263,7 +296,7 @@ fn trans_message(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<
                 buf.push(b',');
             }
         }
-        trans_value(buf, unsafe { cur_type.as_ref() }, val)?;
+        trans_field_value(buf, cur_field.unwrap(), val)?;
     }
 
     if rep_close != 0 {
@@ -274,25 +307,20 @@ fn trans_message(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<
     Ok(())
 }
 
-pub fn trans_proto_to_json(buf: &mut Vec<u8>, dec: &mut Decoder, ty: &Type) -> Result<()> {
-    match ty {
-        Type::Message(msg) => trans_message(buf, dec, msg),
-        _ => Err(Error::TypeMismatch),
-    }
+pub fn trans_proto_to_json(buf: &mut Vec<u8>, dec: &mut Decoder, msg: &Message) -> Result<()> {
+    trans_message(buf, dec, msg)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use super::super::tests::*;
     use super::*;
 
-    fn test_trans_proto_to_json(s: &[u8], ty: &Type) {
+    fn test_trans_proto_to_json(s: &[u8], msg: &Message) {
         println!("input: {}", printable(s));
         let mut buf = Vec::new();
         let mut dec = Decoder::new(s);
-        let r = trans_proto_to_json(&mut buf, &mut dec, ty);
+        let r = trans_proto_to_json(&mut buf, &mut dec, msg);
         if let Err(ref e) = r {
             println!("err: {}", e);
         }
@@ -330,15 +358,18 @@ mod tests {
 
     #[test]
     fn test_trans_proto_to_json_case3() {
-        let ty = Type::Message(Message::new(
-            "pbmsg.RawData".to_string(),
-            vec![Field {
-                name: "a".to_string(),
-                tag: 1,
-                ty: Rc::new(Type::Bytes),
-            }],
-            false,
-        ));
-        test_trans_proto_to_json(&[10, 5, 104, 101, 108, 108, 111], &ty);
+        test_trans_proto_to_json(
+            &[10, 5, 104, 101, 108, 108, 111],
+            &Message::new(
+                "pbmsg.RawData".to_string(),
+                vec![Field {
+                    name: "a".to_string(),
+                    tag: 1,
+                    kind: Kind::Bytes,
+                    repeated: false,
+                }],
+                false,
+            ),
+        );
     }
 }

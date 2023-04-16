@@ -79,8 +79,8 @@ impl Encoder {
     pub fn write_varint(&mut self, v: u64) {
         if v >= 128 {
             unsafe {
-                let mut buf: [u8; MAX_VARINT_SIZE] = mem::MaybeUninit::uninit().assume_init();
-                let p = buf.as_mut_ptr();
+                let mut buf = mem::MaybeUninit::<[u8; MAX_VARINT_SIZE]>::uninit();
+                let p = buf.as_mut_ptr() as *mut u8;
                 let mut n = 0usize;
                 let mut v = v;
                 loop {
@@ -92,7 +92,7 @@ impl Encoder {
                     }
                 }
                 p.add(n).write(v as u8);
-                self.inner.extend_from_slice(&buf[..n + 1]);
+                self.inner.extend_from_slice(&(*buf.as_ptr())[..n + 1]);
             }
         } else {
             self.inner.push(v as u8);

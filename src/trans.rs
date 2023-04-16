@@ -3,9 +3,6 @@ use std::fmt;
 use std::io;
 use std::result;
 
-use crate::metadata::*;
-use crate::proto::*;
-
 mod append;
 mod jtop;
 mod ptoj;
@@ -46,34 +43,11 @@ impl From<io::Error> for Error {
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub(self) fn wire_type(ty: &Type) -> u32 {
-    match ty {
-        Type::Double => WIRE_64BIT,
-        Type::Float => WIRE_32BIT,
-        Type::Int32 => WIRE_VARINT,
-        Type::Int64 => WIRE_VARINT,
-        Type::Uint32 => WIRE_VARINT,
-        Type::Uint64 => WIRE_VARINT,
-        Type::Sint32 => WIRE_VARINT,
-        Type::Sint64 => WIRE_VARINT,
-        Type::Fixed32 => WIRE_32BIT,
-        Type::Fixed64 => WIRE_64BIT,
-        Type::Sfixed32 => WIRE_32BIT,
-        Type::Sfixed64 => WIRE_64BIT,
-        Type::Bool => WIRE_VARINT,
-        Type::String => WIRE_LEN_DELIM,
-        Type::Bytes => WIRE_LEN_DELIM,
-        Type::Array(_) => WIRE_LEN_DELIM,
-        Type::Map(_, _) => WIRE_LEN_DELIM,
-        Type::Message(_) => WIRE_LEN_DELIM,
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use std::rc::Rc;
 
-    use super::*;
+    use crate::metadata::{Field, Kind, Message};
 
     pub fn printable(s: &[u8]) -> String {
         s.iter()
@@ -82,85 +56,96 @@ pub mod tests {
             .join(" ")
     }
 
-    pub fn get_msg_elem_type() -> Type {
-        Type::Message(Message::new(
+    pub fn get_msg_elem_type() -> Kind {
+        Kind::Message(Rc::new(Message::new(
             "pbmsg.Elem".to_string(),
             vec![
                 Field {
                     name: "a".to_string(),
                     tag: 1,
-                    ty: Rc::new(Type::Int32),
+                    kind: Kind::Int32,
+                    repeated: false,
                 },
                 Field {
                     name: "s".to_string(),
                     tag: 2,
-                    ty: Rc::new(Type::String),
+                    kind: Kind::String,
+                    repeated: false,
                 },
             ],
             true,
-        ))
+        )))
     }
 
-    pub fn get_msg_foo_embed_type() -> Type {
-        Type::Message(Message::new(
+    pub fn get_msg_foo_embed_type() -> Kind {
+        Kind::Message(Rc::new(Message::new(
             "pbmsg.Foo.Embed".to_string(),
             vec![
                 Field {
                     name: "a".to_string(),
                     tag: 1,
-                    ty: Rc::new(Type::Int32),
+                    kind: Kind::Int32,
+                    repeated: false,
                 },
                 Field {
                     name: "b".to_string(),
                     tag: 2,
-                    ty: Rc::new(Type::String),
+                    kind: Kind::String,
+                    repeated: false,
                 },
             ],
             true,
-        ))
+        )))
     }
 
-    pub fn get_msg_foo_type() -> Type {
-        Type::Message(Message::new(
+    pub fn get_msg_foo_type() -> Message {
+        Message::new(
             "pbmsg.Foo".to_string(),
             vec![
                 Field {
                     name: "a".to_string(),
                     tag: 1,
-                    ty: Rc::new(Type::String),
+                    kind: Kind::String,
+                    repeated: false,
                 },
                 Field {
                     name: "b".to_string(),
                     tag: 2,
-                    ty: Rc::new(Type::Bool),
+                    kind: Kind::Bool,
+                    repeated: false,
                 },
                 Field {
                     name: "c".to_string(),
                     tag: 3,
-                    ty: Rc::new(Type::Int32),
+                    kind: Kind::Int32,
+                    repeated: false,
                 },
                 Field {
                     name: "d".to_string(),
                     tag: 4,
-                    ty: Rc::new(get_msg_foo_embed_type()),
+                    kind: get_msg_foo_embed_type(),
+                    repeated: false,
                 },
                 Field {
                     name: "e".to_string(),
                     tag: 5,
-                    ty: Rc::new(Type::Array(Rc::new(Type::Int32))),
+                    kind: Kind::Int32,
+                    repeated: true,
                 },
                 Field {
                     name: "f".to_string(),
                     tag: 6,
-                    ty: Rc::new(Type::Array(Rc::new(Type::String))),
+                    kind: Kind::String,
+                    repeated: true,
                 },
                 Field {
                     name: "g".to_string(),
                     tag: 7,
-                    ty: Rc::new(Type::Array(Rc::new(get_msg_elem_type()))),
+                    kind: get_msg_elem_type(),
+                    repeated: true,
                 },
             ],
             true,
-        ))
+        )
     }
 }

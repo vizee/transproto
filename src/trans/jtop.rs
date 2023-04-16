@@ -1,6 +1,8 @@
-use std::rc::Rc;
+use base64::prelude::*;
 
 use crate::json::*;
+use crate::metadata::*;
+use crate::proto::*;
 
 use super::*;
 
@@ -104,22 +106,22 @@ fn skip_value(it: &mut Iter, tok: Token) -> Result<()> {
 }
 
 #[allow(clippy::float_cmp)]
-fn trans_numeric(enc: &mut Encoder, ty: &Type, tag: u32, s: &[u8]) -> Result<()> {
+fn trans_numeric(enc: &mut Encoder, kind: &Kind, tag: u32, s: &[u8]) -> Result<()> {
     ::std::str::from_utf8(s)
         .map_err(|e| Error::Wrap(e.into()))
-        .and_then(|s| match ty {
-            Type::Double => write_num_field!(enc, tag, s, f64),
-            Type::Float => write_num_field!(enc, tag, s, f32),
-            Type::Int32 => write_num_field!(enc, tag, s, i32, false),
-            Type::Int64 => write_num_field!(enc, tag, s, i64, false),
-            Type::Uint32 => write_num_field!(enc, tag, s, u32, false),
-            Type::Uint64 => write_num_field!(enc, tag, s, u64, false),
-            Type::Sint32 => write_num_field!(enc, tag, s, i32, true),
-            Type::Sint64 => write_num_field!(enc, tag, s, i64, true),
-            Type::Fixed32 => write_num_field!(enc, tag, s, u32),
-            Type::Fixed64 => write_num_field!(enc, tag, s, u64),
-            Type::Sfixed32 => write_num_field!(enc, tag, s, i32),
-            Type::Sfixed64 => write_num_field!(enc, tag, s, i64),
+        .and_then(|s| match kind {
+            Kind::Double => write_num_field!(enc, tag, s, f64),
+            Kind::Float => write_num_field!(enc, tag, s, f32),
+            Kind::Int32 => write_num_field!(enc, tag, s, i32, false),
+            Kind::Int64 => write_num_field!(enc, tag, s, i64, false),
+            Kind::Uint32 => write_num_field!(enc, tag, s, u32, false),
+            Kind::Uint64 => write_num_field!(enc, tag, s, u64, false),
+            Kind::Sint32 => write_num_field!(enc, tag, s, i32, true),
+            Kind::Sint64 => write_num_field!(enc, tag, s, i64, true),
+            Kind::Fixed32 => write_num_field!(enc, tag, s, u32),
+            Kind::Fixed64 => write_num_field!(enc, tag, s, u64),
+            Kind::Sfixed32 => write_num_field!(enc, tag, s, i32),
+            Kind::Sfixed64 => write_num_field!(enc, tag, s, i64),
             _ => Err(Error::TypeMismatch),
         })
 }
@@ -135,7 +137,8 @@ fn trans_string(enc: &mut Encoder, s: &[u8], tag: u32) -> Result<()> {
 
 fn trans_bytes(enc: &mut Encoder, s: &[u8], tag: u32) -> Result<()> {
     let mut z = Vec::with_capacity(s.len() * 4 / 3);
-    base64::decode_config_buf(&s[1..s.len() - 1], base64::STANDARD, &mut z)
+    BASE64_STANDARD
+        .decode_slice(&s[1..s.len() - 1], &mut z)
         .map_err(|e| Error::Wrap(e.into()))?;
     if !z.is_empty() {
         enc.emit_len_delim(tag, &z);
@@ -143,8 +146,11 @@ fn trans_bytes(enc: &mut Encoder, s: &[u8], tag: u32) -> Result<()> {
     Ok(())
 }
 
-fn trans_map(enc: &mut Encoder, it: &mut Iter, tag: u32, kty: &Type, vty: &Type) -> Result<()> {
-    let mut entry = Encoder::new();
+fn trans_map(enc: &mut Encoder, it: &mut Iter, tag: u32, entry: &Message) -> Result<()> {
+    assert_eq!(entry.get_fields().len(), 2);
+    let key_field = &entry.get_fields()[0];
+    let val_field = &entry.get_fields()[1];
+    let mut sub_enc = Encoder::new();
     let mut key: Option<Token> = None;
     while let Some(tok) = it.next() {
         match tok {
@@ -152,10 +158,10 @@ fn trans_map(enc: &mut Encoder, it: &mut Iter, tag: u32, kty: &Type, vty: &Type)
             Token::Comma | Token::Colon => continue,
             _ => {
                 if let Some(k) = key {
-                    entry.clear();
-                    trans_field(&mut entry, it, 1, k, kty)?;
-                    trans_field(&mut entry, it, 2, tok, vty)?;
-                    let data = entry.as_bytes();
+                    sub_enc.clear();
+                    trans_field(&mut sub_enc, it, 1, k, key_field)?;
+                    trans_field(&mut sub_enc, it, 2, tok, val_field)?;
+                    let data = sub_enc.as_bytes();
                     if !data.is_empty() {
                         enc.emit_len_delim(tag, data);
                     }
@@ -185,9 +191,9 @@ where
     Err(Error::UnexpectedEof)
 }
 
-fn trans_repeated(enc: &mut Encoder, it: &mut Iter, tag: u32, elem: &Rc<Type>) -> Result<()> {
-    match elem.as_ref() {
-        Type::Message(msg) => {
+fn trans_repeated(enc: &mut Encoder, it: &mut Iter, tag: u32, elem: &Field) -> Result<()> {
+    match elem.kind {
+        Kind::Message(ref msg) => {
             let mut z = Encoder::new();
             trans_repeated_impl(it, |it, tok| match tok {
                 Token::Object => {
@@ -199,7 +205,7 @@ fn trans_repeated(enc: &mut Encoder, it: &mut Iter, tag: u32, elem: &Rc<Type>) -
                 _ => Err(Error::UnexpectedToken),
             })
         }
-        Type::String => {
+        Kind::String => {
             let mut z = Vec::new();
             trans_repeated_impl(it, |_, tok| match tok {
                 Token::String(s) => {
@@ -212,12 +218,13 @@ fn trans_repeated(enc: &mut Encoder, it: &mut Iter, tag: u32, elem: &Rc<Type>) -
                 _ => Err(Error::UnexpectedToken),
             })
         }
-        Type::Bytes => {
+        Kind::Bytes => {
             let mut z = Vec::new();
             trans_repeated_impl(it, |_, tok| match tok {
                 Token::String(s) => {
                     z.clear();
-                    base64::decode_config_buf(&s[1..s.len() - 1], base64::STANDARD, &mut z)
+                    BASE64_STANDARD
+                        .decode_slice(&s[1..s.len() - 1], &mut z)
                         .map_err(|e| Error::Wrap(e.into()))?;
                     enc.emit_len_delim(tag, &z);
                     Ok(())
@@ -227,20 +234,20 @@ fn trans_repeated(enc: &mut Encoder, it: &mut Iter, tag: u32, elem: &Rc<Type>) -
         }
         _ => {
             let mut packed = Encoder::new();
-            match elem.as_ref() {
-                Type::Bool => trans_repeated_impl(it, write_elem_fn!(packed, bool)),
-                Type::Double => trans_repeated_impl(it, write_elem_fn!(packed, f64)),
-                Type::Float => trans_repeated_impl(it, write_elem_fn!(packed, f32)),
-                Type::Int32 => trans_repeated_impl(it, write_elem_fn!(packed, i32, false)),
-                Type::Int64 => trans_repeated_impl(it, write_elem_fn!(packed, i64, false)),
-                Type::Uint32 => trans_repeated_impl(it, write_elem_fn!(packed, u32, false)),
-                Type::Uint64 => trans_repeated_impl(it, write_elem_fn!(packed, u64, false)),
-                Type::Sint32 => trans_repeated_impl(it, write_elem_fn!(packed, i32, true)),
-                Type::Sint64 => trans_repeated_impl(it, write_elem_fn!(packed, i64, true)),
-                Type::Fixed32 => trans_repeated_impl(it, write_elem_fn!(packed, u32)),
-                Type::Fixed64 => trans_repeated_impl(it, write_elem_fn!(packed, u64)),
-                Type::Sfixed32 => trans_repeated_impl(it, write_elem_fn!(packed, i32)),
-                Type::Sfixed64 => trans_repeated_impl(it, write_elem_fn!(packed, i64)),
+            match elem.kind {
+                Kind::Bool => trans_repeated_impl(it, write_elem_fn!(packed, bool)),
+                Kind::Double => trans_repeated_impl(it, write_elem_fn!(packed, f64)),
+                Kind::Float => trans_repeated_impl(it, write_elem_fn!(packed, f32)),
+                Kind::Int32 => trans_repeated_impl(it, write_elem_fn!(packed, i32, false)),
+                Kind::Int64 => trans_repeated_impl(it, write_elem_fn!(packed, i64, false)),
+                Kind::Uint32 => trans_repeated_impl(it, write_elem_fn!(packed, u32, false)),
+                Kind::Uint64 => trans_repeated_impl(it, write_elem_fn!(packed, u64, false)),
+                Kind::Sint32 => trans_repeated_impl(it, write_elem_fn!(packed, i32, true)),
+                Kind::Sint64 => trans_repeated_impl(it, write_elem_fn!(packed, i64, true)),
+                Kind::Fixed32 => trans_repeated_impl(it, write_elem_fn!(packed, u32)),
+                Kind::Fixed64 => trans_repeated_impl(it, write_elem_fn!(packed, u64)),
+                Kind::Sfixed32 => trans_repeated_impl(it, write_elem_fn!(packed, i32)),
+                Kind::Sfixed64 => trans_repeated_impl(it, write_elem_fn!(packed, i64)),
                 _ => return Err(Error::TypeMismatch),
             }?;
             if !packed.is_empty() {
@@ -258,16 +265,22 @@ fn trans_embedded_message(enc: &mut Encoder, it: &mut Iter, tag: u32, msg: &Mess
     Ok(())
 }
 
-fn trans_field(enc: &mut Encoder, it: &mut Iter, tag: u32, lead: Token, ty: &Type) -> Result<()> {
+fn trans_field(
+    enc: &mut Encoder,
+    it: &mut Iter,
+    tag: u32,
+    lead: Token,
+    field: &Field,
+) -> Result<()> {
     match lead {
-        Token::String(s) => match ty {
-            Type::String => trans_string(enc, s, tag),
-            Type::Bytes => trans_bytes(enc, s, tag),
+        Token::String(s) => match field.kind {
+            Kind::String => trans_string(enc, s, tag),
+            Kind::Bytes => trans_bytes(enc, s, tag),
             _ => Err(Error::TypeMismatch),
         },
-        Token::Number(n) => trans_numeric(enc, ty, tag, n),
-        Token::True | Token::False => match ty {
-            Type::Bool => {
+        Token::Number(n) => trans_numeric(enc, &field.kind, tag, n),
+        Token::True | Token::False => match field.kind {
+            Kind::Bool => {
                 if matches!(lead, Token::True) {
                     enc.emit_varint(tag, 1);
                 }
@@ -275,19 +288,26 @@ fn trans_field(enc: &mut Encoder, it: &mut Iter, tag: u32, lead: Token, ty: &Typ
             }
             _ => Err(Error::TypeMismatch),
         },
-        Token::Null => match ty {
-            Type::Bytes | Type::Message(_) | Type::Array(_) | Type::Map(_, _) => Ok(()),
+        Token::Null => {
+            if field.repeated || matches!(field.kind, Kind::Bytes | Kind::Message(_) | Kind::Map(_))
+            {
+                Ok(())
+            } else {
+                Err(Error::TypeMismatch)
+            }
+        }
+        Token::Object => match field.kind {
+            Kind::Message(ref msg) => trans_embedded_message(enc, it, tag, msg),
+            Kind::Map(ref entry) => trans_map(enc, it, tag, entry),
             _ => Err(Error::TypeMismatch),
         },
-        Token::Object => match ty {
-            Type::Message(msg) => trans_embedded_message(enc, it, tag, msg),
-            Type::Map(kty, vty) => trans_map(enc, it, tag, kty, vty),
-            _ => Err(Error::TypeMismatch),
-        },
-        Token::Array => match ty {
-            Type::Array(elem) => trans_repeated(enc, it, tag, elem),
-            _ => Err(Error::TypeMismatch),
-        },
+        Token::Array => {
+            if field.repeated {
+                trans_repeated(enc, it, tag, field)
+            } else {
+                Err(Error::TypeMismatch)
+            }
+        }
         _ => Err(Error::UnexpectedToken),
     }
 }
@@ -303,7 +323,7 @@ fn trans_message(enc: &mut Encoder, it: &mut Iter, msg: &Message) -> Result<()> 
                     let name = ::std::str::from_utf8(&k[1..k.len() - 1])
                         .map_err(|e| Error::Wrap(e.into()))?;
                     if let Some(field) = msg.get_by_name(name) {
-                        trans_field(enc, it, field.tag, tok, &field.ty)?;
+                        trans_field(enc, it, field.tag, tok, &field)?;
                     } else {
                         skip_value(it, tok)?;
                     }
@@ -319,14 +339,11 @@ fn trans_message(enc: &mut Encoder, it: &mut Iter, msg: &Message) -> Result<()> 
     Err(Error::UnexpectedEof)
 }
 
-pub fn trans_json_to_proto(enc: &mut Encoder, it: &mut Iter, ty: &Type) -> Result<()> {
-    match ty {
-        Type::Message(msg) => match it.next() {
-            Some(Token::Object) => trans_message(enc, it, msg),
-            None => Err(Error::UnexpectedEof),
-            _ => Err(Error::UnexpectedToken),
-        },
-        _ => Err(Error::TypeMismatch),
+pub fn trans_json_to_proto(enc: &mut Encoder, it: &mut Iter, msg: &Message) -> Result<()> {
+    match it.next() {
+        Some(Token::Object) => trans_message(enc, it, msg),
+        None => Err(Error::UnexpectedEof),
+        _ => Err(Error::UnexpectedToken),
     }
 }
 

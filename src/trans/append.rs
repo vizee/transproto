@@ -4,13 +4,17 @@ pub trait Append {
 
 impl Append for f32 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        dtoa::write(buf, self).expect("never get error");
+        let mut b = dtoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }
 
 impl Append for f64 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        dtoa::write(buf, self).expect("never get error");
+        let mut b = dtoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }
 
@@ -22,24 +26,32 @@ impl Append for bool {
 
 impl Append for i32 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        itoa::write(buf, self).expect("never get error");
+        let mut b = itoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }
 
 impl Append for i64 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        itoa::write(buf, self).expect("never get error");
+        let mut b = itoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }
 
 impl Append for u32 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        itoa::write(buf, self).expect("never get error");
+        let mut b = itoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }
 
 impl Append for u64 {
     fn append_into(self, buf: &mut Vec<u8>) {
-        itoa::write(buf, self).expect("never get error");
+        let mut b = itoa::Buffer::new();
+        let printed = b.format(self);
+        buf.extend_from_slice(printed.as_bytes());
     }
 }

@@ -9,86 +9,97 @@ use transcode::metadata::*;
 use transcode::proto::{Decoder, Encoder};
 use transcode::{trans_json_to_proto, trans_proto_to_json};
 
-fn get_msg_elem_type() -> Type {
-    Type::Message(Message::new(
+fn get_msg_elem_type() -> Message {
+    Message::new(
         "pbmsg.Elem".to_string(),
         vec![
             Field {
                 name: "a".to_string(),
                 tag: 1,
-                ty: Rc::new(Type::Int32),
+                kind: Kind::Int32,
+                repeated: false,
             },
             Field {
                 name: "s".to_string(),
                 tag: 2,
-                ty: Rc::new(Type::String),
+                kind: Kind::String,
+                repeated: false,
             },
         ],
         true,
-    ))
+    )
 }
 
-fn get_msg_foo_embed_type() -> Type {
-    Type::Message(Message::new(
+fn get_msg_foo_embed_type() -> Message {
+    Message::new(
         "pbmsg.Foo.Embed".to_string(),
         vec![
             Field {
                 name: "a".to_string(),
                 tag: 1,
-                ty: Rc::new(Type::Int32),
+                kind: Kind::Int32,
+                repeated: false,
             },
             Field {
                 name: "b".to_string(),
                 tag: 2,
-                ty: Rc::new(Type::String),
+                kind: Kind::String,
+                repeated: false,
             },
         ],
         true,
-    ))
+    )
 }
 
-fn get_msg_foo_type() -> Type {
-    Type::Message(Message::new(
+fn get_msg_foo_type() -> Message {
+    Message::new(
         "pbmsg.Foo".to_string(),
         vec![
             Field {
                 name: "a".to_string(),
                 tag: 1,
-                ty: Rc::new(Type::String),
+                kind: Kind::String,
+                repeated: false,
             },
             Field {
                 name: "b".to_string(),
                 tag: 2,
-                ty: Rc::new(Type::Bool),
+                kind: Kind::Bool,
+                repeated: false,
             },
             Field {
                 name: "c".to_string(),
                 tag: 3,
-                ty: Rc::new(Type::Int32),
+                kind: Kind::Int32,
+                repeated: false,
             },
             Field {
                 name: "d".to_string(),
                 tag: 4,
-                ty: Rc::new(get_msg_foo_embed_type()),
+                kind: Kind::Message(Rc::new(get_msg_foo_embed_type())),
+                repeated: false,
             },
             Field {
                 name: "e".to_string(),
                 tag: 5,
-                ty: Rc::new(Type::Array(Rc::new(Type::Int32))),
+                kind: Kind::Int32,
+                repeated: true,
             },
             Field {
                 name: "f".to_string(),
                 tag: 6,
-                ty: Rc::new(Type::Array(Rc::new(Type::String))),
+                kind: Kind::String,
+                repeated: true,
             },
             Field {
                 name: "g".to_string(),
                 tag: 7,
-                ty: Rc::new(Type::Array(Rc::new(get_msg_elem_type()))),
+                kind: Kind::Message(Rc::new(get_msg_elem_type())),
+                repeated: true,
             },
         ],
         true,
-    ))
+    )
 }
 
 const BENCH_JSON_CASE0: &[u8] = b"{}";
@@ -99,40 +110,40 @@ const BENCH_PB_CASE1: &[u8] = &[
     49, 50, 2, 102, 50, 58, 6, 8, 6, 18, 2, 115, 48, 58, 6, 8, 7, 18, 2, 115, 49,
 ];
 
-fn run_trans_json_to_proto(s: &[u8], ty: &Type) {
+fn run_trans_json_to_proto(s: &[u8], msg: &Message) {
     let mut enc = Encoder::new();
     let mut it = Iter::new(s);
-    let r = trans_json_to_proto(&mut enc, &mut it, ty);
+    let r = trans_json_to_proto(&mut enc, &mut it, msg);
     assert!(r.is_ok());
 }
 
 #[bench]
 fn bench_trans_json_to_proto_case0(b: &mut Bencher) {
-    let ty = get_msg_foo_type();
-    b.iter(|| run_trans_json_to_proto(BENCH_JSON_CASE0, &ty));
+    let msg = get_msg_foo_type();
+    b.iter(|| run_trans_json_to_proto(BENCH_JSON_CASE0, &msg));
 }
 
 #[bench]
 fn bench_trans_json_to_proto_case1(b: &mut Bencher) {
-    let ty = get_msg_foo_type();
-    b.iter(|| run_trans_json_to_proto(BENCH_JSON_CASE1, &ty));
+    let msg = get_msg_foo_type();
+    b.iter(|| run_trans_json_to_proto(BENCH_JSON_CASE1, &msg));
 }
 
-fn run_trans_proto_to_json(s: &[u8], ty: &Type) {
+fn run_trans_proto_to_json(s: &[u8], msg: &Message) {
     let mut buf = Vec::new();
     let mut dec = Decoder::new(s);
-    let r = trans_proto_to_json(&mut buf, &mut dec, ty);
+    let r = trans_proto_to_json(&mut buf, &mut dec, msg);
     assert!(r.is_ok());
 }
 
 #[bench]
 fn bench_trans_proto_to_json_case0(b: &mut Bencher) {
-    let ty = get_msg_foo_type();
-    b.iter(|| run_trans_proto_to_json(BENCH_PB_CASE0, &ty));
+    let msg = get_msg_foo_type();
+    b.iter(|| run_trans_proto_to_json(BENCH_PB_CASE0, &msg));
 }
 
 #[bench]
 fn bench_trans_proto_to_json_case1(b: &mut Bencher) {
-    let ty = get_msg_foo_type();
-    b.iter(|| run_trans_proto_to_json(BENCH_PB_CASE1, &ty));
+    let msg = get_msg_foo_type();
+    b.iter(|| run_trans_proto_to_json(BENCH_PB_CASE1, &msg));
 }

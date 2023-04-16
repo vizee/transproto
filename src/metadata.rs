@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-// https://developers.google.com/protocol-buffers/docs/proto3
+// https://protobuf.dev/programming-guides/proto3/
 
 #[derive(Clone)]
-pub enum Type {
+pub enum Kind {
     Double,
     Float,
     Int32,
@@ -20,9 +20,8 @@ pub enum Type {
     Bool,
     String,
     Bytes,
-    Array(Rc<Type>),
-    Map(Rc<Type>, Rc<Type>),
-    Message(Message),
+    Message(Rc<Message>),
+    Map(Rc<Message>),
 }
 
 #[derive(Clone)]
@@ -37,7 +36,8 @@ pub struct Message {
 pub struct Field {
     pub name: String,
     pub tag: u32,
-    pub ty: Rc<Type>,
+    pub kind: Kind,
+    pub repeated: bool,
 }
 
 impl Message {
