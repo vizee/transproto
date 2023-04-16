@@ -1,11 +1,11 @@
 [package]
-name = "transcode"
+name = "transproto"
 version = "0.2.0"
 authors = ["vizee <vizee@live.cn>"]
 edition = "2021"
 license = "MIT"
 description = "translates encoding between json and protobuf"
-repository = "https://github.com/vizee/transcode"
+repository = "https://github.com/vizee/transproto"
 readme = "README.md"
 
 [dependencies]
