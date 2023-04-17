@@ -4,10 +4,10 @@ extern crate test;
 use std::rc::Rc;
 
 use test::Bencher;
-use transcode::json::Iter;
-use transcode::metadata::*;
-use transcode::proto::{Decoder, Encoder};
-use transcode::{trans_json_to_proto, trans_proto_to_json};
+use transproto::json::Iter;
+use transproto::metadata::*;
+use transproto::proto::{Decoder, Encoder};
+use transproto::{trans_json_to_proto, trans_proto_to_json};
 
 fn get_msg_elem_type() -> Message {
     Message::new(
